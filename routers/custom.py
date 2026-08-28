@@ -3,11 +3,14 @@ import io
 import time
 from typing import Optional
 from PIL import Image
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Query
+from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+from database import get_db
+from models import AdviceLog, CustomSynthesisLog
 
 # 환경 변수 로드
 load_dotenv()
@@ -52,6 +55,7 @@ async def synthesize_custom_wheel(
     original_vehicle_image: UploadFile = File(..., description="사용자가 업로드한 원본 차량 사진 (필수)"),
     uploaded_wheel_image: Optional[UploadFile] = File(None, description="사용자가 직접 업로드한 휠 사진"),
     selected_asset_id: Optional[str] = Form(None, description="기본 라이브러리에서 선택한 휠 ID"),
+    db: Session = Depends(get_db),
 ):
     if not uploaded_wheel_image and not selected_asset_id:
         raise HTTPException(
@@ -109,7 +113,7 @@ async def synthesize_custom_wheel(
         if generated_bytes is None:
             raise HTTPException(status_code=500, detail="이미지 합성 결과를 받지 못했습니다.")
 
-        # 5) 결과물 저장
+        # 5) 로컬 결과 파일 저장
         result_id = int(time.time() * 1000)
         output_filename = f"result_{result_id}.jpg"
         output_path = os.path.join(STATIC_DIR, output_filename)
@@ -117,9 +121,22 @@ async def synthesize_custom_wheel(
         with open(output_path, "wb") as f:
             f.write(generated_bytes)
 
+        result_image_url = f"{BASE_URL}/static/results/{output_filename}"
+
+        # 6) DB에 저장
+        asset_info = selected_asset_id if not uploaded_wheel_image else "UPLOADED_IMAGE"
+        synthesis_log = CustomSynthesisLog(
+            user_id=None,
+            selected_asset_id=asset_info,
+            result_image_url=result_image_url
+        )
+        db.add(synthesis_log)
+        db.commit()
+        db.refresh(synthesis_log)
+
         return {
-            "result_id": result_id,
-            "result_image_url": f"{BASE_URL}/static/results/{output_filename}"
+            "result_id": synthesis_log.id,
+            "result_image_url": synthesis_log.result_image_url
         }
 
     except HTTPException:
@@ -137,7 +154,8 @@ class VehicleRecommendBody(BaseModel):
 @router.post("/recommend/vehicle", tags=["Recommend"])
 async def recommend_vehicle_specs(
     body: VehicleRecommendBody,
-    id: int = Query(..., description="사용자 정보 id (BIGSERIAL)"),
+    id: Optional[int] = Query(None, description="사용자 정보 id (BIGSERIAL, 선택사항)"),
+    db: Session = Depends(get_db),
 ):
     prompt = (
     f"차종: {body.vehicle_model}\n\n"
@@ -155,10 +173,21 @@ async def recommend_vehicle_specs(
             model="gemini-3.6-flash",
             contents=prompt
         )
-        advice_id = int(time.time() * 1000)
+
+        # DB에 저장
+        advice_log = AdviceLog(
+            user_id=id,
+            query_type="RECOMMEND",
+            user_query=body.vehicle_model,
+            gemini_response=response.text
+        )
+        db.add(advice_log)
+        db.commit()
+        db.refresh(advice_log)
+
         return {
-            "advice_id": advice_id,
-            "gemini_response": response.text
+            "advice_id": advice_log.id,
+            "gemini_response": advice_log.gemini_response
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 분석 중 오류 발생: {str(e)}")
@@ -172,7 +201,10 @@ class WheelSearchBody(BaseModel):
     vehicle_model: Optional[str] = Field(None, example="현대 아반떼 CN7", description="호환성을 함께 확인할 차량 모델명")
 
 @router.post("/search/wheel", tags=["Search"])
-async def search_wheel_spec(body: WheelSearchBody):
+async def search_wheel_spec(
+    body: WheelSearchBody,
+    db: Session = Depends(get_db),
+):
     style_rules = (
         "\n\n작성 규칙:\n"
         "- 전체 500자 이내로 간결하게\n"
@@ -190,22 +222,35 @@ async def search_wheel_spec(body: WheelSearchBody):
             f"2. 해당 휠이 {body.vehicle_model}에 PCD, 옵셋, 휀더 간섭 없이 장착 가능한지 진단해줘."
             + style_rules
         )
+        query_text = f"휠: {body.wheel_name}, 차량: {body.vehicle_model}"
     else:
         prompt = (
             f"휠 제품명: {body.wheel_name}\n\n"
             f"{body.wheel_name}의 제조사, 주요 출시 인치 및 PCD, 림폭/옵셋 범위, 제조 공법을 요약해줘."
             + style_rules
         )
+        query_text = f"휠: {body.wheel_name}"
 
     try:
         response = client.models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt
         )
-        advice_id = int(time.time() * 1000)
+
+        # DB에 저장
+        advice_log = AdviceLog(
+            user_id=None,
+            query_type="SEARCH",
+            user_query=query_text,
+            gemini_response=response.text
+        )
+        db.add(advice_log)
+        db.commit()
+        db.refresh(advice_log)
+
         return {
-            "advice_id": advice_id,
-            "gemini_response": response.text
+            "advice_id": advice_log.id,
+            "gemini_response": advice_log.gemini_response
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"제원 검색 중 오류 발생: {str(e)}")
