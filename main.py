@@ -1,19 +1,36 @@
+import os
 import psycopg2
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from routers import custom
+from database import engine, Base
+import models
 
-app = FastAPI(title="mywheel-backend")
+app = FastAPI(title="mywheel-backend", version="1.0.0")
+# CORS 설정
 
-# 프론트엔드(Vite 개발 서버)에서 이 API를 호출할 수 있도록 허용한다.
-# 5173 포트가 이미 사용 중이면 Vite가 5174, 5175 ... 로 자동으로 옮겨가므로
-# 포트를 고정하지 않고 localhost/127.0.0.1의 모든 포트를 허용한다.
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+
+# 정적 이미지 파일 서빙 (/static/results/...)
+STATIC_PATH = os.path.join(os.path.dirname(__file__), "static")
+os.makedirs(STATIC_PATH, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
+
+# DB 테이블 자동 생성 (없으면 생성, 있으면 무시)
+Base.metadata.create_all(bind=engine)   
+
+#  단 1줄로 등록 (prefix를 /api/v1 로 통일)
+app.include_router(custom.router, prefix="/api/v1")
+
+# DB 설정 (경수 코드)
 DB_CONFIG = {
     "host": "localhost",
     "port": 5432,
@@ -22,15 +39,12 @@ DB_CONFIG = {
     "password": "mywheel",
 }
 
-
 def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
-
-@app.get("/health")
+@app.get("/health", tags=["default"])
 def health():
     return {"status": "ok"}
-
 
 # 회원가입/로그인(/auth/...)은 auth.py, 유저 조회(/users/...)는 users.py,
 # 네이버 지도 연동과 정비업체 조회(/map/...)는 map.py 에 정의되어 있다.
@@ -43,3 +57,4 @@ from map import router as map_router
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(map_router)
+
