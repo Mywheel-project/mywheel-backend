@@ -1,6 +1,5 @@
 import os
 import psycopg2
-import psycopg2.extras
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -9,15 +8,16 @@ from database import engine, Base
 import models
 
 app = FastAPI(title="mywheel-backend", version="1.0.0")
-
 # CORS 설정
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # 정적 이미지 파일 서빙 (/static/results/...)
 STATIC_PATH = os.path.join(os.path.dirname(__file__), "static")
@@ -46,9 +46,15 @@ def get_connection():
 def health():
     return {"status": "ok"}
 
-@app.get("/users", tags=["default"])
-def get_users():
-    with get_connection() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT id, name, email, created_at FROM users ORDER BY id;")
-            return cur.fetchall()
+# 회원가입/로그인(/auth/...)은 auth.py, 유저 조회(/users/...)는 users.py,
+# 네이버 지도 연동과 정비업체 조회(/map/...)는 map.py 에 정의되어 있다.
+# 파일 하단에서 import 하는 이유는 각 라우터가 get_connection 을 함수 내부에서
+# 다시 import 해가기 때문에(순환 import 방지), main 모듈이 먼저 완성된 뒤 연결되어야 한다.
+from auth import router as auth_router
+from users import router as users_router
+from map import router as map_router
+
+app.include_router(auth_router)
+app.include_router(users_router)
+app.include_router(map_router)
+
