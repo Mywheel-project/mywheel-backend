@@ -3,7 +3,7 @@ import psycopg2
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from routers import custom
+from routers import custom, posts, comments
 from database import engine, Base
 import models
 
@@ -29,6 +29,8 @@ Base.metadata.create_all(bind=engine)
 
 #  단 1줄로 등록 (prefix를 /api/v1 로 통일)
 app.include_router(custom.router, prefix="/api/v1")
+app.include_router(posts.router)
+app.include_router(comments.router)
 
 # DB 설정 (경수 코드)
 DB_CONFIG = {
