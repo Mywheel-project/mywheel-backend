@@ -2,7 +2,7 @@ import psycopg2.extras
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import get_connection, init_db
+from database1 import get_connection, init_db
 from routers import posts, comments, auth1
 
 app = FastAPI(title="mywheel-backend")
