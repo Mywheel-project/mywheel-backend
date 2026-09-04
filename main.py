@@ -1,11 +1,18 @@
+
 import os
 import psycopg2
+import psycopg2.extras
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from routers import custom
+
+# 양쪽 데이터베이스 설정 임포트
 from database import engine, Base
+from database1 import get_connection, init_db
 import models
+
+# 양쪽 라우터 모두 임포트
+from routers import posts, comments, auth1, custom
 
 app = FastAPI(title="mywheel-backend", version="1.0.0")
 # CORS 설정
@@ -13,10 +20,29 @@ app = FastAPI(title="mywheel-backend", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"http://(localhost|127\.0\.0\.1):\d+",
+
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# 서버 시작 시 테이블 초기화
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+# 라우터 등록
+app.include_router(auth1.router)
+app.include_router(posts.router)
+app.include_router(comments.router)
+
+
+# ------------------ [기본 엔드포인트] ------------------
+
+@app.get("/")
+def read_root():
+    return {"message": "MyWheel 백엔드 서버가 정상 작동 중입니다!"}
 
 
 # 정적 이미지 파일 서빙 (/static/results/...)
@@ -42,6 +68,7 @@ DB_CONFIG = {
 def get_connection():
     return psycopg2.connect(**DB_CONFIG)
 
+
 @app.get("/health", tags=["default"])
 def health():
     return {"status": "ok"}
@@ -57,4 +84,3 @@ from map import router as map_router
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(map_router)
-
