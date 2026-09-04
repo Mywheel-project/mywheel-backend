@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import get_connection, init_db
-from routers import posts, comments, auth
+from routers import posts, comments, auth1
 
 app = FastAPI(title="mywheel-backend")
 
@@ -28,7 +28,7 @@ def on_startup():
     init_db()
 
 # 라우터 등록
-app.include_router(auth.router)
+app.include_router(auth1.router)
 app.include_router(posts.router)
 app.include_router(comments.router)
 
