@@ -32,7 +32,7 @@ app.include_router(custom.router, prefix="/api/v1")
 
 # DB 설정 (경수 코드)
 DB_CONFIG = {
-    "host": "localhost",
+    "host": os.getenv("DB_HOST", "localhost"),
     "port": 5432,
     "dbname": "mywheel",
     "user": "mywheel",

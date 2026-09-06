@@ -1,0 +1,16 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mywheel-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://mywheel:mywheel@postgres:5432/mywheel
+      DB_HOST: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
