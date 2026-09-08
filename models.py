@@ -1,4 +1,4 @@
-from sqlalchemy import Column, BigInteger, String, Text, TIMESTAMP, func
+from sqlalchemy import Column, BigInteger, Integer, String, Text, TIMESTAMP, func, UniqueConstraint
 from database import Base
 
 
@@ -21,3 +21,16 @@ class CustomSynthesisLog(Base):
     selected_asset_id = Column(String(100), nullable=True)
     result_image_url = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class UserWheelFavorite(Base):
+    __tablename__ = "user_wheel_favorites"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    wheel_id = Column(Integer, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "wheel_id", name="uq_user_wheel_favorite"),
+    )

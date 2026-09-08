@@ -20,7 +20,7 @@ router = APIRouter()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # 전역 상수 / 경로 / 기본 URL 설정
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+BASE_URL = os.getenv("BASE_URL")
 
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "results")

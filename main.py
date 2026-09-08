@@ -3,7 +3,7 @@ import psycopg2
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from routers import custom
+from routers import custom, favorites
 from database import engine, Base
 import models
 
@@ -27,8 +27,9 @@ app.mount("/static", StaticFiles(directory=STATIC_PATH), name="static")
 # DB 테이블 자동 생성 (없으면 생성, 있으면 무시)
 Base.metadata.create_all(bind=engine)   
 
-#  단 1줄로 등록 (prefix를 /api/v1 로 통일)
+#  라우터 등록 (prefix를 /api/v1 로 통일)
 app.include_router(custom.router, prefix="/api/v1")
+app.include_router(favorites.router, prefix="/api/v1")
 
 # DB 설정 (경수 코드)
 DB_CONFIG = {
