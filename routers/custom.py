@@ -3,7 +3,7 @@ import io
 import time
 from typing import Optional
 from PIL import Image
-from fastapi import APIRouter, File, Form, UploadFile, HTTPException, Query, Depends
+from fastapi import APIRouter, File, Form, Header, UploadFile, HTTPException, Query, Depends
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
@@ -55,6 +55,7 @@ async def synthesize_custom_wheel(
     original_vehicle_image: UploadFile = File(..., description="사용자가 업로드한 원본 차량 사진 (필수)"),
     uploaded_wheel_image: Optional[UploadFile] = File(None, description="사용자가 직접 업로드한 휠 사진"),
     selected_asset_id: Optional[str] = Form(None, description="기본 라이브러리에서 선택한 휠 ID"),
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
     db: Session = Depends(get_db),
 ):
     if not uploaded_wheel_image and not selected_asset_id:
@@ -126,7 +127,7 @@ async def synthesize_custom_wheel(
         # 6) DB에 저장
         asset_info = selected_asset_id if not uploaded_wheel_image else "UPLOADED_IMAGE"
         synthesis_log = CustomSynthesisLog(
-            user_id=None,
+            user_id=x_user_id,
             selected_asset_id=asset_info,
             result_image_url=result_image_url
         )
@@ -143,6 +144,34 @@ async def synthesize_custom_wheel(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"합성 처리 오류: {str(e)}")
+
+
+# ----------------------------------------------------
+# 1-1. 내 합성 갤러리 조회: GET /api/v1/custom/gallery
+# ----------------------------------------------------
+@router.get("/custom/gallery", tags=["Custom"])
+def get_my_gallery(
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    db: Session = Depends(get_db),
+):
+    if x_user_id is None:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
+
+    logs = (
+        db.query(CustomSynthesisLog)
+        .filter(CustomSynthesisLog.user_id == x_user_id)
+        .order_by(CustomSynthesisLog.created_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "id": log.id,
+            "image_url": log.result_image_url,
+            "created_at": log.created_at,
+        }
+        for log in logs
+    ]
 
 
 # ----------------------------------------------------
