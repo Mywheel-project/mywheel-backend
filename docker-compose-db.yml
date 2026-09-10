@@ -13,7 +13,7 @@ services:
       - pgdata:/var/lib/postgresql/data
 
 volumes:
-  # 기존 db/docker-compose.yml(project: db)로 만들어졌던 db_pgdata 볼륨을 그대로 재사용 (데이터 유지)
+  # 이름을 고정해서 db_pgdata 볼륨이 이미 있으면(기존 db/docker-compose.yml로 만든 머신) 그대로 재사용하고,
+  # 없으면(새 환경) 같은 이름으로 새로 생성됨. external: true로 강제하면 없는 환경에서 에러가 나서 안 씀.
   pgdata:
-    
     name: db_pgdata

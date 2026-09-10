@@ -56,8 +56,10 @@ def health():
 from auth import router as auth_router
 from users import router as users_router
 from map import router as map_router
+from routers.vehicles import router as vehicles_router
 
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(map_router)
+app.include_router(vehicles_router)
 
