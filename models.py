@@ -1,16 +1,5 @@
-from sqlalchemy import Column, BigInteger, String, Text, TIMESTAMP, ForeignKey, Table, func
+from sqlalchemy import Column, BigInteger, Integer, String, Text, TIMESTAMP, func, UniqueConstraint
 from database import Base
-
-# users 테이블은 SQLAlchemy 모델이 아니라 db/schema.sql 로 수동 생성되므로 Base.metadata에
-# 등록되어 있지 않다. Vehicle.user_id 가 "users.id"를 FK로 참조하려면 create_all() 이 그
-# 이름의 Table을 metadata에서 찾을 수 있어야 하므로, id 컬럼만 가진 프록시 Table을 등록해둔다.
-# 실제 users 테이블은 이미 DB에 존재하므로 create_all() 이 이걸로 덮어쓰거나 새로 만들지 않는다.
-users_table = Table(
-    "users",
-    Base.metadata,
-    Column("id", BigInteger, primary_key=True),
-    extend_existing=True,
-)
 
 
 class AdviceLog(Base):
@@ -32,6 +21,30 @@ class CustomSynthesisLog(Base):
     selected_asset_id = Column(String(100), nullable=True)
     result_image_url = Column(Text, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class UserWheelFavorite(Base):
+    __tablename__ = "user_wheel_favorites"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+    wheel_id = Column(Integer, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "wheel_id", name="uq_user_wheel_favorite"),
+    )
+
+# users 테이블은 SQLAlchemy 모델이 아니라 db/schema.sql 로 수동 생성되므로 Base.metadata에
+# 등록되어 있지 않다. Vehicle.user_id 가 "users.id"를 FK로 참조하려면 create_all() 이 그
+# 이름의 Table을 metadata에서 찾을 수 있어야 하므로, id 컬럼만 가진 프록시 Table을 등록해둔다.
+# 실제 users 테이블은 이미 DB에 존재하므로 create_all() 이 이걸로 덮어쓰거나 새로 만들지 않는다.
+users_table = Table(
+    "users",
+    Base.metadata,
+    Column("id", BigInteger, primary_key=True),
+    extend_existing=True,
+)
 
 
 class Vehicle(Base):
