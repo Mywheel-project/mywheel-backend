@@ -1,5 +1,5 @@
 import psycopg2.extras
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Query
 from typing import List
 
 from schemas import PostCreate, PostUpdate, PostResponse
@@ -67,16 +67,31 @@ def create_post(post: PostCreate, x_user_id: int | None = Header(default=None, a
             return new_post
 
 
-# 게시글 목록 조회 (로그인 불필요, 로그인했다면 liked_by_me도 같이 내려줌)
+# search 쿼리 파라미터가 있으면 제목/내용에 LIKE 검색 적용
 @router.get("", response_model=List[PostResponse])
-def get_posts(x_user_id: int | None = Header(default=None, alias="X-User-Id")):
+def get_posts(
+    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
+    search: str | None = Query(default=None),
+):
     current_user = _get_current_user_optional(x_user_id)
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(
-                "SELECT id, title, content, author, created_at, likes_count, view_count, user_id FROM posts ORDER BY id DESC;"
-            )
+            if search:
+                 keyword = f"%{search.replace(' ', '')}%"
+                 cur.execute(
+                    """
+                    SELECT id, title, content, author, created_at, likes_count, view_count, user_id
+                    FROM posts
+                    WHERE REPLACE(title, ' ', '') ILIKE %s OR REPLACE(content, ' ', '') ILIKE %s
+                    ORDER BY id DESC;
+                    """,
+                    (keyword, keyword)
+                )
+            else:
+                cur.execute(
+                    "SELECT id, title, content, author, created_at, likes_count, view_count, user_id FROM posts ORDER BY id DESC;"
+                )
             posts = cur.fetchall()
             for post in posts:
                 _attach_liked_by_me(cur, post, current_user)
