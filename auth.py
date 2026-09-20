@@ -5,12 +5,16 @@ main.py 는 이 라우터를 include_router 로 등록만 하고,
 """
 
 import os
+import secrets
+from datetime import datetime, timedelta
 
 import bcrypt
 from fastapi import APIRouter, HTTPException
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, EmailStr, Field
+
+from mailer import send_verification_email
 
 # 이 라우터의 모든 엔드포인트는 자동으로 "/auth" 접두사가 붙는다.
 # 따라서 아래 signup 함수의 "/signup" 은 실제로는 "/auth/signup" 이 된다.
@@ -19,6 +23,11 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # 아직 실제 프로필 이미지 업로드 기능이 없어서, 가입 시 모든 유저에게
 # 동일한 더미 프로필 이미지 URL을 저장해둔다.
 DUMMY_PROFILE_IMAGE_URL = "https://placehold.co/200x200/9E9E9E/FFFFFF?text=User"
+
+# 이메일 인증 코드 관련 정책값.
+CODE_EXPIRE_MINUTES = 10  # 코드 유효 시간
+RESEND_COOLDOWN_SECONDS = 60  # 재전송 최소 간격 (메일 스팸 발송 방지)
+MAX_CODE_ATTEMPTS = 5  # 틀린 코드 허용 횟수 (브루트포스 방지)
 
 
 class SignupRequest(BaseModel):
@@ -30,7 +39,7 @@ class SignupRequest(BaseModel):
 
 
 class SignupResponse(BaseModel):
-    """회원가입 성공 응답. 비밀번호(해시 포함)는 절대 응답에 담지 않는다."""
+    """계정 생성 성공 응답(이메일 인증 완료 시점). 비밀번호(해시 포함)는 절대 응답에 담지 않는다."""
 
     id: int
     email: EmailStr
@@ -38,7 +47,14 @@ class SignupResponse(BaseModel):
     profile_image: str | None = None
 
 
-@router.post("/signup", response_model=SignupResponse, status_code=201)
+class SignupPendingResponse(BaseModel):
+    """인증 코드 발송 완료 응답. 이 시점에는 아직 계정이 생성되지 않았다."""
+
+    email: EmailStr
+    message: str = "인증 코드를 이메일로 보냈습니다."
+
+
+@router.post("/signup", response_model=SignupPendingResponse)
 def signup(payload: SignupRequest):
     # main.py 의 get_connection 을 재사용한다.
     # 함수 안에서 import 하는 이유: main.py 가 이 파일(auth.py)을 import 하므로,
@@ -50,26 +66,125 @@ def signup(payload: SignupRequest):
     password_hash = bcrypt.hashpw(
         payload.password.encode("utf-8"), bcrypt.gensalt()
     ).decode("utf-8")
+    # secrets.randbelow 는 암호학적으로 안전한 난수를 생성한다 (random 모듈 대신 사용).
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    now = datetime.utcnow()
+    expires_at = now + timedelta(minutes=CODE_EXPIRE_MINUTES)
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # 이메일 중복 가입 방지 (users.email 은 UNIQUE 이지만, 사용자에게
-            # 더 친절한 에러 메시지를 주기 위해 미리 조회한다).
+            # 이미 인증까지 끝난 이메일이면 여기서 막는다 (실제 중복 가입 방지).
             cur.execute("SELECT id FROM users WHERE email = %s;", (payload.email,))
             if cur.fetchone() is not None:
                 raise HTTPException(status_code=409, detail="이미 가입된 이메일입니다.")
 
-            # provider 는 자체(local) 회원가입이므로 'local' 로 고정 저장한다.
-            # created_at / updated_at 은 DB 기본값(now())을 그대로 사용한다.
+            # 같은 이메일로 너무 자주 재요청하면 메일 스팸이 되므로 최소 간격을 둔다.
+            cur.execute(
+                "SELECT last_sent_at FROM pending_signups WHERE email = %s;",
+                (payload.email,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                elapsed = (now - row[0]).total_seconds()
+                if elapsed < RESEND_COOLDOWN_SECONDS:
+                    wait = int(RESEND_COOLDOWN_SECONDS - elapsed)
+                    raise HTTPException(
+                        status_code=429, detail=f"{wait}초 후 다시 시도해주세요."
+                    )
+
+            # 같은 이메일로 재요청한 경우 새 row 를 만들지 않고 코드만 갱신한다
+            # (인증 안 된 row 가 방치되어 쌓이는 걸 막는다).
+            cur.execute(
+                """
+                INSERT INTO pending_signups
+                    (email, password_hash, nickname, code, expires_at, attempt_count, last_sent_at)
+                VALUES (%s, %s, %s, %s, %s, 0, %s)
+                ON CONFLICT (email) DO UPDATE SET
+                    password_hash = EXCLUDED.password_hash,
+                    nickname = EXCLUDED.nickname,
+                    code = EXCLUDED.code,
+                    expires_at = EXCLUDED.expires_at,
+                    attempt_count = 0,
+                    last_sent_at = EXCLUDED.last_sent_at;
+                """,
+                (payload.email, password_hash, payload.nickname, code, expires_at, now),
+            )
+            conn.commit()
+
+    send_verification_email(payload.email, code)
+
+    return SignupPendingResponse(email=payload.email)
+
+
+class VerifyCodeRequest(BaseModel):
+    """이메일 인증 코드 확인 요청 바디. 이 요청이 성공해야 실제 계정이 생성된다."""
+
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+
+@router.post("/verify-code", response_model=SignupResponse, status_code=201)
+def verify_code(payload: VerifyCodeRequest):
+    from main import get_connection
+
+    now = datetime.utcnow()
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT password_hash, nickname, code, expires_at, attempt_count
+                FROM pending_signups WHERE email = %s;
+                """,
+                (payload.email,),
+            )
+            row = cur.fetchone()
+
+            if row is None:
+                raise HTTPException(status_code=400, detail="인증 요청을 먼저 진행해주세요.")
+
+            password_hash, nickname, correct_code, expires_at, attempt_count = row
+
+            if now > expires_at:
+                cur.execute("DELETE FROM pending_signups WHERE email = %s;", (payload.email,))
+                conn.commit()
+                raise HTTPException(
+                    status_code=400, detail="인증 코드가 만료되었습니다. 다시 가입을 요청해주세요."
+                )
+
+            if attempt_count >= MAX_CODE_ATTEMPTS:
+                cur.execute("DELETE FROM pending_signups WHERE email = %s;", (payload.email,))
+                conn.commit()
+                raise HTTPException(
+                    status_code=400, detail="인증 시도 횟수를 초과했습니다. 다시 가입을 요청해주세요."
+                )
+
+            if payload.code != correct_code:
+                cur.execute(
+                    "UPDATE pending_signups SET attempt_count = attempt_count + 1 WHERE email = %s;",
+                    (payload.email,),
+                )
+                conn.commit()
+                raise HTTPException(status_code=401, detail="인증 코드가 일치하지 않습니다.")
+
+            # 코드가 맞으면 이메일 소유가 확인된 것 -> 이 시점에 처음으로 실제 계정을 만든다.
+            cur.execute("SELECT id FROM users WHERE email = %s;", (payload.email,))
+            if cur.fetchone() is not None:
+                cur.execute("DELETE FROM pending_signups WHERE email = %s;", (payload.email,))
+                conn.commit()
+                raise HTTPException(status_code=409, detail="이미 가입된 이메일입니다.")
+
             cur.execute(
                 """
                 INSERT INTO users (email, password_hash, nickname, profile_image, provider)
                 VALUES (%s, %s, %s, %s, 'local')
                 RETURNING id, email, nickname, profile_image;
                 """,
-                (payload.email, password_hash, payload.nickname, DUMMY_PROFILE_IMAGE_URL),
+                (payload.email, password_hash, nickname, DUMMY_PROFILE_IMAGE_URL),
             )
             new_id, new_email, new_nickname, new_profile_image = cur.fetchone()
+
+            cur.execute("DELETE FROM pending_signups WHERE email = %s;", (payload.email,))
             conn.commit()
 
     return SignupResponse(
