@@ -4,8 +4,12 @@ main.py 는 이 라우터를 include_router 로 등록만 하고,
 실제 요청 검증 / 비밀번호 해싱 / DB 저장 로직은 모두 여기서 처리한다.
 """
 
+import os
+
 import bcrypt
 from fastapi import APIRouter, HTTPException
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, EmailStr, Field
 
 # 이 라우터의 모든 엔드포인트는 자동으로 "/auth" 접두사가 붙는다.
@@ -116,3 +120,64 @@ def login(payload: LoginRequest):
         raise invalid_credentials
 
     return LoginResponse(id=user_id, email=email, nickname=nickname, profile_image=profile_image)
+
+
+class GoogleLoginRequest(BaseModel):
+    """구글 로그인 요청 바디. 프론트에서 Google Identity Services 로 받은 ID 토큰(JWT)을 그대로 담는다."""
+
+    credential: str = Field(min_length=1)
+
+
+@router.post("/google", response_model=LoginResponse)
+def google_login(payload: GoogleLoginRequest):
+    from main import get_connection
+
+    # verify_oauth2_token 이 서명/만료/audience(GOOGLE_CLIENT_ID)를 모두 검증해준다.
+    # 검증에 실패하면 ValueError 를 던진다.
+    try:
+        idinfo = google_id_token.verify_oauth2_token(
+            payload.credential, google_requests.Request(), os.getenv("GOOGLE_CLIENT_ID")
+        )
+    except ValueError as exc:
+        print(f"[auth/google] verify_oauth2_token failed: {exc!r}")  # TEMP DEBUG
+        raise HTTPException(status_code=401, detail="유효하지 않은 구글 인증 정보입니다.")
+
+    email = idinfo["email"]
+    nickname = idinfo.get("name") or email.split("@")[0]
+    profile_image = idinfo.get("picture")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, email, nickname, profile_image, provider FROM users WHERE email = %s;",
+                (email,),
+            )
+            row = cur.fetchone()
+
+            # 이미 이메일/비밀번호로 가입된 계정이면 자동으로 연동하지 않고 막는다.
+            # (구글 계정 소유자가 아닌 사람이 같은 이메일로 남의 로컬 계정에 접근하는 것을 방지)
+            if row is not None and row[4] != "google":
+                raise HTTPException(
+                    status_code=409,
+                    detail="이미 이메일/비밀번호로 가입된 계정입니다. 이메일과 비밀번호로 로그인해주세요.",
+                )
+
+            if row is None:
+                # 처음 구글로 로그인하는 사용자 -> 자동 가입. password_hash 는 없다(NULL).
+                cur.execute(
+                    """
+                    INSERT INTO users (email, nickname, profile_image, provider)
+                    VALUES (%s, %s, %s, 'google')
+                    RETURNING id, email, nickname, profile_image;
+                    """,
+                    (email, nickname, profile_image),
+                )
+                row = cur.fetchone()
+                conn.commit()
+            else:
+                row = row[:4]
+
+    user_id, user_email, user_nickname, user_profile_image = row
+    return LoginResponse(
+        id=user_id, email=user_email, nickname=user_nickname, profile_image=user_profile_image
+    )
