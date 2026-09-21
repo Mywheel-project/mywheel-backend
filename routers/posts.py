@@ -6,8 +6,15 @@ from schemas import PostCreate, PostUpdate, PostResponse
 # main 프로젝트는 JWT 대신 X-User-Id 헤더로 로그인 유저를 식별한다.
 # 별도 deps.py를 새로 만드는 대신, users.py의 _require_user_id를 그대로 재사용한다.
 from users import _require_user_id
+from fastapi import Form, File, UploadFile
+import os
+import uuid
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "community")
+os.makedirs(STATIC_DIR, exist_ok=True)
+BASE_URL = "http://localhost:8000"
 
 
 def _get_current_user(x_user_id: int | None):
@@ -45,10 +52,32 @@ def _attach_liked_by_me(cur, post: dict, current_user) -> dict:
         post["liked_by_me"] = False
     return post
 
+def _save_image_locally(file: UploadFile) -> str:
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    filepath = os.path.join(STATIC_DIR, filename)
+    with open(filepath, "wb") as f:
+        f.write(file.file.read())
+    return f"{BASE_URL}/static/community/{filename}"
+
+
+def _attach_images(cur, post: dict) -> dict:
+    cur.execute(
+        "SELECT image_url FROM post_images WHERE post_id = %s ORDER BY id;",
+        (post["id"],)
+    )
+    rows = cur.fetchall()
+    post["images"] = [row["image_url"] for row in rows]
+    return post
 
 # 게시글 등록 (로그인 필요)
 @router.post("", response_model=PostResponse)
-def create_post(post: PostCreate, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
+def create_post(
+    title: str = Form(...),
+    content: str = Form(...),
+    images: List[UploadFile] = File(default=[]),
+    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
+):
     current_user = _get_current_user(x_user_id)
     from main import get_connection
     with get_connection() as conn:
@@ -59,11 +88,23 @@ def create_post(post: PostCreate, x_user_id: int | None = Header(default=None, a
                 VALUES (%s, %s, %s, %s)
                 RETURNING id, title, content, author, created_at, likes_count, view_count, user_id;
                 """,
-                (post.title, post.content, current_user["nickname"], current_user["id"])
+                (title, content, current_user["nickname"], current_user["id"])
             )
             new_post = cur.fetchone()
+
+            image_urls = []
+            for img in images:
+                if img.filename:
+                    url = _save_image_locally(img)
+                    image_urls.append(url)
+                    cur.execute(
+                        "INSERT INTO post_images (post_id, image_url) VALUES (%s, %s);",
+                        (new_post["id"], url)
+                    )
+
             conn.commit()
             new_post["liked_by_me"] = False
+            new_post["images"] = image_urls
             return new_post
 
 
@@ -94,7 +135,8 @@ def get_posts(
                 )
             posts = cur.fetchall()
             for post in posts:
-                _attach_liked_by_me(cur, post, current_user)
+                post = _attach_liked_by_me(cur, post, current_user)
+                post = _attach_images(cur, post)
             return posts
 
 
@@ -137,6 +179,7 @@ def get_hot_posts(x_user_id: int | None = Header(default=None, alias="X-User-Id"
             for post in posts:
                 post.pop("hot_score", None)
                 _attach_liked_by_me(cur, post, current_user)
+                post = _attach_images(cur, post)
             return posts
 
 
@@ -161,12 +204,20 @@ def get_post(post_id: int, x_user_id: int | None = Header(default=None, alias="X
             if not post:
                 raise HTTPException(status_code=404, detail="게시글을 찾을 수 없습니다.")
             _attach_liked_by_me(cur, post, current_user)
+            post = _attach_images(cur, post)
             return post
 
 
 # 게시글 수정 (로그인 필요 + 작성자 본인만 가능)
 @router.put("/{post_id}", response_model=PostResponse)
-def update_post(post_id: int, post: PostUpdate, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
+def update_post(
+    post_id: int,
+    title: str = Form(...),
+    content: str = Form(...),
+    existing_images: List[str] = Form(default=[]),
+    images: List[UploadFile] = File(default=[]),
+    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
+):
     current_user = _get_current_user(x_user_id)
     from main import get_connection
     with get_connection() as conn:
@@ -185,11 +236,36 @@ def update_post(post_id: int, post: PostUpdate, x_user_id: int | None = Header(d
                 WHERE id = %s
                 RETURNING id, title, content, author, created_at, likes_count, view_count, user_id;
                 """,
-                (post.title, post.content, post_id)
+                (title, content, post_id)
             )
             updated_post = cur.fetchone()
+
+            # 프론트에서 "남기겠다"고 보낸 URL(existing_images)에 없는 기존 이미지는 삭제
+            cur.execute(
+                "SELECT id, image_url FROM post_images WHERE post_id = %s;",
+                (post_id,)
+            )
+            current_rows = cur.fetchall()
+            for row in current_rows:
+                if row["image_url"] not in existing_images:
+                    cur.execute("DELETE FROM post_images WHERE id = %s;", (row["id"],))
+                    filename = row["image_url"].split("/")[-1]
+                    filepath = os.path.join(STATIC_DIR, filename)
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+
+            # 새로 첨부된 이미지 저장
+            for img in images:
+                if img.filename:
+                    url = _save_image_locally(img)
+                    cur.execute(
+                        "INSERT INTO post_images (post_id, image_url) VALUES (%s, %s);",
+                        (post_id, url)
+                    )
+
             conn.commit()
             _attach_liked_by_me(cur, updated_post, current_user)
+            updated_post = _attach_images(cur, updated_post)
             return updated_post
 
 
