@@ -2,6 +2,24 @@ from sqlalchemy import Column, BigInteger, Integer, String, Text, TIMESTAMP, fun
 from database import Base
 
 
+class PendingSignup(Base):
+    """이메일 인증 전, 아직 실제 계정이 아닌 회원가입 요청을 담아두는 임시 테이블.
+
+    인증 코드가 확인되면 이 row는 삭제되고 그때 users 테이블에 실제 계정이 생성된다.
+    같은 이메일로 재요청하면 새 row를 만드는 게 아니라 이 row를 덮어쓴다(auth.py의 ON CONFLICT).
+    """
+
+    __tablename__ = "pending_signups"
+
+    email = Column(String, primary_key=True)
+    password_hash = Column(Text, nullable=False)
+    nickname = Column(String(50), nullable=False)
+    code = Column(String(6), nullable=False)
+    expires_at = Column(TIMESTAMP, nullable=False)
+    attempt_count = Column(Integer, nullable=False, server_default="0")
+    last_sent_at = Column(TIMESTAMP, nullable=False, server_default=func.now())
+
+
 class AdviceLog(Base):
     __tablename__ = "advice_logs"
 
