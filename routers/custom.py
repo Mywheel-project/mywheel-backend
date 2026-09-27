@@ -1,6 +1,7 @@
 import os
 import io
 import time
+import asyncio
 from datetime import datetime, time as dtime, timedelta, timezone
 from typing import Optional
 from PIL import Image
@@ -179,7 +180,7 @@ async def synthesize_custom_wheel(
     try:
         # 1) 원본 차량 이미지 로드
         vehicle_bytes = await original_vehicle_image.read()
-        vehicle_pil = Image.open(io.BytesIO(vehicle_bytes))
+        vehicle_pil = await asyncio.to_thread(Image.open, io.BytesIO(vehicle_bytes))
 
         # 원본 비율에 가장 가까운 지원 비율 계산
         target_aspect_ratio = closest_supported_aspect_ratio(*vehicle_pil.size)
@@ -187,7 +188,7 @@ async def synthesize_custom_wheel(
         # 2) 합성용 프롬프트 + 입력 이미지 구성
         if uploaded_wheel_image:
             wheel_bytes = await uploaded_wheel_image.read()
-            wheel_pil = Image.open(io.BytesIO(wheel_bytes))
+            wheel_pil = await asyncio.to_thread(Image.open, io.BytesIO(wheel_bytes))
 
             edit_prompt = (
                 "Image 1 is a car. Image 2 is a wheel rim. "
@@ -204,8 +205,8 @@ async def synthesize_custom_wheel(
             )
             contents = [edit_prompt, vehicle_pil]
 
-        # 3) Gemini 2.5 Flash Image(나노바나나)로 직접 합성
-        image_response = client.models.generate_content(
+        # 3) Gemini 2.5/3.1 Flash Image 비동기 직접 합성
+        image_response = await client.aio.models.generate_content(
             model="gemini-3.1-flash-image",
             contents=contents,
             config=types.GenerateContentConfig(
@@ -226,13 +227,16 @@ async def synthesize_custom_wheel(
         if generated_bytes is None:
             raise HTTPException(status_code=500, detail="이미지 합성 결과를 받지 못했습니다.")
 
-        # 5) 로컬 결과 파일 저장
+        # 5) 로컬 결과 파일 저장 (논블로킹 파일 쓰기)
         result_id = int(time.time() * 1000)
         output_filename = f"result_{result_id}.jpg"
         output_path = os.path.join(STATIC_DIR, output_filename)
 
-        with open(output_path, "wb") as f:
-            f.write(generated_bytes)
+        def _save_image_file(path: str, data: bytes):
+            with open(path, "wb") as f:
+                f.write(data)
+
+        await asyncio.to_thread(_save_image_file, output_path, generated_bytes)
 
         result_image_url = f"{BASE_URL}/static/results/{output_filename}"
 
@@ -325,7 +329,7 @@ async def recommend_vehicle_specs(
     )
 
     try:
-        response = client.models.generate_content(
+        response = await client.aio.models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt
         )
@@ -404,7 +408,7 @@ async def search_wheel_spec(
         query_text = f"휠: {body.wheel_name}"
 
     try:
-        response = client.models.generate_content(
+        response = await client.aio.models.generate_content(
             model="gemini-3.6-flash",
             contents=prompt
         )
