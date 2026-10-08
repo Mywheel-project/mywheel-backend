@@ -1,17 +1,15 @@
 import psycopg2.extras
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List
 
 from schemas import CommentCreate, CommentResponse
-# posts.py와 동일하게, users.py의 X-User-Id 헤더 기반 인증 방식을 그대로 사용한다.
-from users import _require_user_id
+from jwt_auth import get_current_user_id
 
 router = APIRouter(prefix="/api/posts/{post_id}/comments", tags=["comments"])
 
 
-def _get_current_user(x_user_id: int | None):
-    """posts.py와 같은 방식(users.py의 X-User-Id 헤더)을 이 파일에서도 그대로 사용."""
-    user_id = _require_user_id(x_user_id)
+def _get_current_user(user_id: int = Depends(get_current_user_id)):
+    """로그인이 반드시 필요한 API에서 사용. JWT로 식별한 유저의 id/nickname을 조회한다."""
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -24,8 +22,7 @@ def _get_current_user(x_user_id: int | None):
 
 # 댓글 등록 (로그인 필요)
 @router.post("", response_model=CommentResponse)
-def create_comment(post_id: int, comment: CommentCreate, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
-    current_user = _get_current_user(x_user_id)
+def create_comment(post_id: int, comment: CommentCreate, current_user: dict = Depends(_get_current_user)):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:

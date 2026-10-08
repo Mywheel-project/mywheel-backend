@@ -14,6 +14,7 @@ from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from pydantic import BaseModel, EmailStr, Field
 
+from jwt_auth import create_access_token
 from mailer import send_verification_email
 
 # 이 라우터의 모든 엔드포인트는 자동으로 "/auth" 접두사가 붙는다.
@@ -45,6 +46,8 @@ class SignupResponse(BaseModel):
     email: EmailStr
     nickname: str
     profile_image: str | None = None
+    access_token: str
+    token_type: str = "bearer"
 
 
 class SignupPendingResponse(BaseModel):
@@ -188,7 +191,11 @@ def verify_code(payload: VerifyCodeRequest):
             conn.commit()
 
     return SignupResponse(
-        id=new_id, email=new_email, nickname=new_nickname, profile_image=new_profile_image
+        id=new_id,
+        email=new_email,
+        nickname=new_nickname,
+        profile_image=new_profile_image,
+        access_token=create_access_token(new_id),
     )
 
 
@@ -206,6 +213,8 @@ class LoginResponse(BaseModel):
     email: EmailStr
     nickname: str
     profile_image: str | None = None
+    access_token: str
+    token_type: str = "bearer"
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -234,7 +243,13 @@ def login(payload: LoginRequest):
     ):
         raise invalid_credentials
 
-    return LoginResponse(id=user_id, email=email, nickname=nickname, profile_image=profile_image)
+    return LoginResponse(
+        id=user_id,
+        email=email,
+        nickname=nickname,
+        profile_image=profile_image,
+        access_token=create_access_token(user_id),
+    )
 
 
 class GoogleLoginRequest(BaseModel):
@@ -294,5 +309,9 @@ def google_login(payload: GoogleLoginRequest):
 
     user_id, user_email, user_nickname, user_profile_image = row
     return LoginResponse(
-        id=user_id, email=user_email, nickname=user_nickname, profile_image=user_profile_image
+        id=user_id,
+        email=user_email,
+        nickname=user_nickname,
+        profile_image=user_profile_image,
+        access_token=create_access_token(user_id),
     )

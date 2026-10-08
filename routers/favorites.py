@@ -1,15 +1,16 @@
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from database import get_db
+from jwt_auth import get_current_user_id_optional
 from models import UserWheelFavorite
 
 router = APIRouter(prefix="/favorites", tags=["Favorites"])
 
 
 class ToggleFavoriteRequest(BaseModel):
-    user_id: Optional[int] = Field(None, description="사용자 ID (헤더 X-User-Id 또는 Body로 전달)")
+    user_id: Optional[int] = Field(None, description="사용자 ID (로그인 토큰 또는 Body로 전달)")
     wheel_id: int = Field(..., description="휠 에셋 ID")
 
 
@@ -26,24 +27,24 @@ class FavoritesListResponse(BaseModel):
 
 
 class SyncFavoritesRequest(BaseModel):
-    user_id: Optional[int] = Field(None, description="사용자 ID (헤더 X-User-Id 또는 Body로 전달)")
+    user_id: Optional[int] = Field(None, description="사용자 ID (로그인 토큰 또는 Body로 전달)")
     favorite_wheel_ids: list[int] = Field(..., description="동기화할 휠 ID 리스트")
 
 
-def resolve_user_id(user_id_param: Optional[int], x_user_id: Optional[int]) -> int:
-    resolved = user_id_param or x_user_id
+def resolve_user_id(user_id_param: Optional[int], token_user_id: Optional[int]) -> int:
+    resolved = user_id_param or token_user_id
     if not resolved:
-        raise HTTPException(status_code=400, detail="user_id가 필요합니다. 쿼리 파라미터나 X-User-Id 헤더를 확인해주세요.")
+        raise HTTPException(status_code=400, detail="user_id가 필요합니다. 쿼리 파라미터나 로그인 상태를 확인해주세요.")
     return resolved
 
 
 @router.get("/wheels", response_model=FavoritesListResponse, summary="사용자의 휠 에셋 즐겨찾기 목록 조회")
 def get_user_wheel_favorites(
     user_id: Optional[int] = Query(None, description="조회할 사용자 ID"),
-    x_user_id: Optional[int] = Header(None, alias="X-User-Id"),
+    token_user_id: Optional[int] = Depends(get_current_user_id_optional),
     db: Session = Depends(get_db),
 ):
-    target_user_id = resolve_user_id(user_id, x_user_id)
+    target_user_id = resolve_user_id(user_id, token_user_id)
     records = (
         db.query(UserWheelFavorite.wheel_id)
         .filter(UserWheelFavorite.user_id == target_user_id)
@@ -57,10 +58,10 @@ def get_user_wheel_favorites(
 @router.post("/wheels/toggle", response_model=ToggleFavoriteResponse, summary="휠 에셋 즐겨찾기 토글 (추가/해제)")
 def toggle_wheel_favorite(
     payload: ToggleFavoriteRequest,
-    x_user_id: Optional[int] = Header(None, alias="X-User-Id"),
+    token_user_id: Optional[int] = Depends(get_current_user_id_optional),
     db: Session = Depends(get_db),
 ):
-    target_user_id = resolve_user_id(payload.user_id, x_user_id)
+    target_user_id = resolve_user_id(payload.user_id, token_user_id)
 
     existing = (
         db.query(UserWheelFavorite)
@@ -100,10 +101,10 @@ def toggle_wheel_favorite(
 @router.post("/wheels/sync", response_model=FavoritesListResponse, summary="로컬 즐겨찾기 목록과 DB 일괄 병합 동기화")
 def sync_wheel_favorites(
     payload: SyncFavoritesRequest,
-    x_user_id: Optional[int] = Header(None, alias="X-User-Id"),
+    token_user_id: Optional[int] = Depends(get_current_user_id_optional),
     db: Session = Depends(get_db),
 ):
-    target_user_id = resolve_user_id(payload.user_id, x_user_id)
+    target_user_id = resolve_user_id(payload.user_id, token_user_id)
 
     existing_ids = {
         r[0]
