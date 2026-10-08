@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_, and_
 from database import get_db
+from jwt_auth import get_current_user_id, get_current_user_id_optional
 from models import AdviceLog, CustomSynthesisLog
 
 # 환경 변수 로드
@@ -99,15 +100,15 @@ def get_feature_usage_count(
 @router.get("/custom/limits", tags=["Custom"])
 def get_custom_feature_limits(
     request: Request,
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: Optional[int] = Depends(get_current_user_id_optional),
     x_client_id: Optional[str] = Header(default=None, alias="X-Client-Id"),
     db: Session = Depends(get_db),
 ):
     client_id = resolve_client_id(request, x_client_id)
 
-    tuning_used = get_feature_usage_count(db, "tuning", x_user_id, client_id)
-    recommend_used = get_feature_usage_count(db, "recommend", x_user_id, client_id)
-    search_used = get_feature_usage_count(db, "search", x_user_id, client_id)
+    tuning_used = get_feature_usage_count(db, "tuning", user_id, client_id)
+    recommend_used = get_feature_usage_count(db, "recommend", user_id, client_id)
+    search_used = get_feature_usage_count(db, "search", user_id, client_id)
 
     return {
         "weekly_limit": WEEKLY_LIMIT,
@@ -159,12 +160,12 @@ async def synthesize_custom_wheel(
     original_vehicle_image: UploadFile = File(..., description="사용자가 업로드한 원본 차량 사진 (필수)"),
     uploaded_wheel_image: Optional[UploadFile] = File(None, description="사용자가 직접 업로드한 휠 사진"),
     selected_asset_id: Optional[str] = Form(None, description="기본 라이브러리에서 선택한 휠 ID"),
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: Optional[int] = Depends(get_current_user_id_optional),
     x_client_id: Optional[str] = Header(default=None, alias="X-Client-Id"),
     db: Session = Depends(get_db),
 ):
     client_id = resolve_client_id(request, x_client_id)
-    used_count = get_feature_usage_count(db, "tuning", x_user_id, client_id)
+    used_count = get_feature_usage_count(db, "tuning", user_id, client_id)
     if used_count >= WEEKLY_LIMIT:
         raise HTTPException(
             status_code=429,
@@ -243,7 +244,7 @@ async def synthesize_custom_wheel(
         # 6) DB에 저장
         asset_info = selected_asset_id if not uploaded_wheel_image else "UPLOADED_IMAGE"
         synthesis_log = CustomSynthesisLog(
-            user_id=x_user_id,
+            user_id=user_id,
             client_id=client_id,
             selected_asset_id=asset_info,
             result_image_url=result_image_url
@@ -269,15 +270,12 @@ async def synthesize_custom_wheel(
 # ----------------------------------------------------
 @router.get("/custom/gallery", tags=["Custom"])
 def get_my_gallery(
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    if x_user_id is None:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-
     logs = (
         db.query(CustomSynthesisLog)
-        .filter(CustomSynthesisLog.user_id == x_user_id)
+        .filter(CustomSynthesisLog.user_id == user_id)
         .order_by(CustomSynthesisLog.created_at.desc())
         .all()
     )
@@ -303,11 +301,11 @@ async def recommend_vehicle_specs(
     request: Request,
     body: VehicleRecommendBody,
     id: Optional[int] = Query(None, description="사용자 정보 id (BIGSERIAL, 선택사항)"),
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: Optional[int] = Depends(get_current_user_id_optional),
     x_client_id: Optional[str] = Header(default=None, alias="X-Client-Id"),
     db: Session = Depends(get_db),
 ):
-    effective_user_id = x_user_id or id
+    effective_user_id = user_id or id
     client_id = resolve_client_id(request, x_client_id)
 
     used_count = get_feature_usage_count(db, "recommend", effective_user_id, client_id)
@@ -368,13 +366,13 @@ class WheelSearchBody(BaseModel):
 async def search_wheel_spec(
     request: Request,
     body: WheelSearchBody,
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: Optional[int] = Depends(get_current_user_id_optional),
     x_client_id: Optional[str] = Header(default=None, alias="X-Client-Id"),
     db: Session = Depends(get_db),
 ):
     client_id = resolve_client_id(request, x_client_id)
 
-    used_count = get_feature_usage_count(db, "search", x_user_id, client_id)
+    used_count = get_feature_usage_count(db, "search", user_id, client_id)
     if used_count >= WEEKLY_LIMIT:
         raise HTTPException(
             status_code=429,
@@ -415,7 +413,7 @@ async def search_wheel_spec(
 
         # DB에 저장
         advice_log = AdviceLog(
-            user_id=x_user_id,
+            user_id=user_id,
             client_id=client_id,
             query_type="SEARCH",
             user_query=query_text,

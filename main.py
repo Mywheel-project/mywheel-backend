@@ -30,7 +30,7 @@ Base.metadata.create_all(bind=engine)
 #  라우터 등록 (prefix를 /api/v1 로 통일)
 app.include_router(custom.router, prefix="/api/v1")
 app.include_router(favorites.router, prefix="/api/v1")
-# 커뮤니티(게시글/댓글) 라우터 등록 — 로그인은 users.py 방식(X-User-Id 헤더) 그대로 사용
+# 커뮤니티(게시글/댓글) 라우터 등록 — 로그인 유저 식별은 jwt_auth.py(JWT Bearer 토큰) 사용
 app.include_router(posts.router)
 app.include_router(comments.router)
 

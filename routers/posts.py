@@ -1,11 +1,9 @@
 import psycopg2.extras
-from fastapi import APIRouter, HTTPException, Header, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List
 
 from schemas import PostCreate, PostUpdate, PostResponse
-# main 프로젝트는 JWT 대신 X-User-Id 헤더로 로그인 유저를 식별한다.
-# 별도 deps.py를 새로 만드는 대신, users.py의 _require_user_id를 그대로 재사용한다.
-from users import _require_user_id
+from jwt_auth import get_current_user_id, get_current_user_id_optional
 from fastapi import Form, File, UploadFile
 import os
 import uuid
@@ -17,27 +15,27 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 BASE_URL = "http://localhost:8000"
 
 
-def _get_current_user(x_user_id: int | None):
-    """로그인이 반드시 필요한 API에서 사용. users.py의 X-User-Id 헤더 방식을 그대로 따른다."""
-    user_id = _require_user_id(x_user_id)
+def _fetch_user(user_id: int):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT id, nickname FROM users WHERE id = %s;", (user_id,))
-            user = cur.fetchone()
-            if not user:
-                raise HTTPException(status_code=401, detail="존재하지 않는 사용자입니다.")
-            return user
+            return cur.fetchone()
 
 
-def _get_current_user_optional(x_user_id: int | None):
+def _get_current_user(user_id: int = Depends(get_current_user_id)):
+    """로그인이 반드시 필요한 API에서 사용. JWT로 식별한 유저의 id/nickname을 조회한다."""
+    user = _fetch_user(user_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="존재하지 않는 사용자입니다.")
+    return user
+
+
+def _get_current_user_optional(user_id: int | None = Depends(get_current_user_id_optional)):
     """로그인이 없어도 되지만, 로그인했다면 누군지 알고 싶은 API에서 사용."""
-    if x_user_id is None:
+    if user_id is None:
         return None
-    try:
-        return _get_current_user(x_user_id)
-    except HTTPException:
-        return None
+    return _fetch_user(user_id)
 
 
 def _attach_liked_by_me(cur, post: dict, current_user) -> dict:
@@ -76,9 +74,8 @@ def create_post(
     title: str = Form(...),
     content: str = Form(...),
     images: List[UploadFile] = File(default=[]),
-    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
+    current_user: dict = Depends(_get_current_user),
 ):
-    current_user = _get_current_user(x_user_id)
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -111,10 +108,9 @@ def create_post(
 # search 쿼리 파라미터가 있으면 제목/내용에 LIKE 검색 적용
 @router.get("", response_model=List[PostResponse])
 def get_posts(
-    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
     search: str | None = Query(default=None),
+    current_user: dict | None = Depends(_get_current_user_optional),
 ):
-    current_user = _get_current_user_optional(x_user_id)
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -143,8 +139,7 @@ def get_posts(
 # 🔥 핫게시물: 최근 7일 이내 게시글 중 (좋아요×3 + 조회수×1) 점수 상위 3개
 # 주의: /{post_id} 보다 반드시 먼저 등록해야 "hot"이 post_id로 잘못 해석되지 않음
 @router.get("/hot", response_model=List[PostResponse])
-def get_hot_posts(x_user_id: int | None = Header(default=None, alias="X-User-Id")):
-    current_user = _get_current_user_optional(x_user_id)
+def get_hot_posts(current_user: dict | None = Depends(_get_current_user_optional)):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -185,8 +180,7 @@ def get_hot_posts(x_user_id: int | None = Header(default=None, alias="X-User-Id"
 
 # 게시글 단건 조회 (조회수 자동 증가, 로그인 여부에 따라 liked_by_me 포함)
 @router.get("/{post_id}", response_model=PostResponse)
-def get_post(post_id: int, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
-    current_user = _get_current_user_optional(x_user_id)
+def get_post(post_id: int, current_user: dict | None = Depends(_get_current_user_optional)):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -216,9 +210,8 @@ def update_post(
     content: str = Form(...),
     existing_images: List[str] = Form(default=[]),
     images: List[UploadFile] = File(default=[]),
-    x_user_id: int | None = Header(default=None, alias="X-User-Id"),
+    current_user: dict = Depends(_get_current_user),
 ):
-    current_user = _get_current_user(x_user_id)
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -271,8 +264,7 @@ def update_post(
 
 # 게시글 삭제 (로그인 필요 + 작성자 본인만 가능)
 @router.delete("/{post_id}")
-def delete_post(post_id: int, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
-    current_user = _get_current_user(x_user_id)
+def delete_post(post_id: int, current_user: dict = Depends(_get_current_user)):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -290,8 +282,7 @@ def delete_post(post_id: int, x_user_id: int | None = Header(default=None, alias
 
 # 좋아요 토글 (로그인 필요, 이미 눌렀으면 취소 / 안 눌렀으면 추가)
 @router.post("/{post_id}/like", response_model=PostResponse)
-def toggle_like(post_id: int, x_user_id: int | None = Header(default=None, alias="X-User-Id")):
-    current_user = _get_current_user(x_user_id)
+def toggle_like(post_id: int, current_user: dict = Depends(_get_current_user)):
     from main import get_connection
     with get_connection() as conn:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
