@@ -3,6 +3,7 @@
 유저당 차량은 1대만 관리한다 (vehicles.user_id UNIQUE, models.Vehicle 참고).
 """
 
+import asyncio
 import os
 import time
 from typing import Optional
@@ -13,12 +14,9 @@ from sqlalchemy.orm import Session
 from database import get_db
 from jwt_auth import get_current_user_id
 from models import Vehicle
+from s3_storage import upload_image
 
 router = APIRouter(prefix="/vehicles", tags=["vehicles"])
-
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "vehicles")
-os.makedirs(STATIC_DIR, exist_ok=True)
 
 
 def _serialize(vehicle: Vehicle) -> dict:
@@ -69,10 +67,9 @@ async def upsert_my_vehicle(
     if image is not None:
         ext = os.path.splitext(image.filename or "")[1] or ".jpg"
         filename = f"{user_id}_{int(time.time() * 1000)}{ext}"
-        file_path = os.path.join(STATIC_DIR, filename)
-        with open(file_path, "wb") as f:
-            f.write(await image.read())
-        vehicle.image_url = f"{BASE_URL}/static/vehicles/{filename}"
+        vehicle.image_url = await asyncio.to_thread(
+            upload_image, "vehicle_photo", filename, await image.read()
+        )
 
     db.commit()
     db.refresh(vehicle)

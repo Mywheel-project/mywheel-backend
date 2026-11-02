@@ -15,6 +15,7 @@ from sqlalchemy import func, or_, and_
 from database import get_db
 from jwt_auth import get_current_user_id, get_current_user_id_optional
 from models import AdviceLog, CustomSynthesisLog
+from s3_storage import upload_image
 
 # 환경 변수 로드
 load_dotenv()
@@ -22,12 +23,6 @@ load_dotenv()
 # 라우터 및 API 클라이언트 초기화
 router = APIRouter()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# 전역 상수 / 경로 / 기본 URL 설정
-BASE_URL = os.getenv("BASE_URL")
-
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "results")
-os.makedirs(STATIC_DIR, exist_ok=True)
 
 # KST(한국 표준시) 및 주간 5회 제한 설정
 KST = timezone(timedelta(hours=9))
@@ -228,18 +223,12 @@ async def synthesize_custom_wheel(
         if generated_bytes is None:
             raise HTTPException(status_code=500, detail="이미지 합성 결과를 받지 못했습니다.")
 
-        # 5) 로컬 결과 파일 저장 (논블로킹 파일 쓰기)
+        # 5) 결과 이미지를 S3에 저장 (이벤트 루프를 막지 않도록 스레드에서 실행)
         result_id = int(time.time() * 1000)
         output_filename = f"result_{result_id}.jpg"
-        output_path = os.path.join(STATIC_DIR, output_filename)
-
-        def _save_image_file(path: str, data: bytes):
-            with open(path, "wb") as f:
-                f.write(data)
-
-        await asyncio.to_thread(_save_image_file, output_path, generated_bytes)
-
-        result_image_url = f"{BASE_URL}/static/results/{output_filename}"
+        result_image_url = await asyncio.to_thread(
+            upload_image, "car_mix_photo", output_filename, generated_bytes
+        )
 
         # 6) DB에 저장
         asset_info = selected_asset_id if not uploaded_wheel_image else "UPLOADED_IMAGE"

@@ -4,15 +4,12 @@ from typing import List
 
 from schemas import PostCreate, PostUpdate, PostResponse
 from jwt_auth import get_current_user_id, get_current_user_id_optional
+from s3_storage import delete_image_by_url, upload_image
 from fastapi import Form, File, UploadFile
 import os
 import uuid
 
 router = APIRouter(prefix="/api/posts", tags=["posts"])
-
-STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "community")
-os.makedirs(STATIC_DIR, exist_ok=True)
-BASE_URL = "http://localhost:8000"
 
 
 def _fetch_user(user_id: int):
@@ -50,13 +47,10 @@ def _attach_liked_by_me(cur, post: dict, current_user) -> dict:
         post["liked_by_me"] = False
     return post
 
-def _save_image_locally(file: UploadFile) -> str:
+def _upload_post_image(file: UploadFile) -> str:
     ext = os.path.splitext(file.filename)[1] or ".jpg"
     filename = f"{uuid.uuid4().hex}{ext}"
-    filepath = os.path.join(STATIC_DIR, filename)
-    with open(filepath, "wb") as f:
-        f.write(file.file.read())
-    return f"{BASE_URL}/static/community/{filename}"
+    return upload_image("community_photo", filename, file.file.read())
 
 
 def _attach_images(cur, post: dict) -> dict:
@@ -92,7 +86,7 @@ def create_post(
             image_urls = []
             for img in images:
                 if img.filename:
-                    url = _save_image_locally(img)
+                    url = _upload_post_image(img)
                     image_urls.append(url)
                     cur.execute(
                         "INSERT INTO post_images (post_id, image_url) VALUES (%s, %s);",
@@ -239,24 +233,27 @@ def update_post(
                 (post_id,)
             )
             current_rows = cur.fetchall()
+            removed_urls = []
             for row in current_rows:
                 if row["image_url"] not in existing_images:
                     cur.execute("DELETE FROM post_images WHERE id = %s;", (row["id"],))
-                    filename = row["image_url"].split("/")[-1]
-                    filepath = os.path.join(STATIC_DIR, filename)
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
+                    removed_urls.append(row["image_url"])
 
             # 새로 첨부된 이미지 저장
             for img in images:
                 if img.filename:
-                    url = _save_image_locally(img)
+                    url = _upload_post_image(img)
                     cur.execute(
                         "INSERT INTO post_images (post_id, image_url) VALUES (%s, %s);",
                         (post_id, url)
                     )
 
             conn.commit()
+
+            # DB 커밋이 성공한 뒤에 지워야, 저장 실패 시 이미지만 사라지는 일이 없다.
+            for url in removed_urls:
+                delete_image_by_url(url)
+
             _attach_liked_by_me(cur, updated_post, current_user)
             updated_post = _attach_images(cur, updated_post)
             return updated_post
