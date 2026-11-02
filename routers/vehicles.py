@@ -7,10 +7,11 @@ import os
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.orm import Session
 
 from database import get_db
+from jwt_auth import get_current_user_id
 from models import Vehicle
 
 router = APIRouter(prefix="/vehicles", tags=["vehicles"])
@@ -18,14 +19,6 @@ router = APIRouter(prefix="/vehicles", tags=["vehicles"])
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "vehicles")
 os.makedirs(STATIC_DIR, exist_ok=True)
-
-
-def _require_user_id(x_user_id: Optional[int]) -> int:
-    # users.py 와 동일하게, 로그인 시 프론트가 저장해둔 유저 id를
-    # X-User-Id 헤더로 실어 보내는 방식으로 "나"를 식별한다.
-    if x_user_id is None:
-        raise HTTPException(status_code=401, detail="로그인이 필요합니다.")
-    return x_user_id
 
 
 def _serialize(vehicle: Vehicle) -> dict:
@@ -42,10 +35,9 @@ def _serialize(vehicle: Vehicle) -> dict:
 
 @router.get("/me")
 def get_my_vehicle(
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(x_user_id)
     vehicle = db.query(Vehicle).filter(Vehicle.user_id == user_id).first()
     return _serialize(vehicle) if vehicle else None
 
@@ -58,10 +50,9 @@ async def upsert_my_vehicle(
     hub_bore: Optional[str] = Form(None),
     bolt_spec: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
-    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+    user_id: int = Depends(get_current_user_id),
     db: Session = Depends(get_db),
 ):
-    user_id = _require_user_id(x_user_id)
 
     vehicle = db.query(Vehicle).filter(Vehicle.user_id == user_id).first()
     if vehicle is None:

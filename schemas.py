@@ -1,7 +1,7 @@
 # 커뮤니티(게시글/댓글) API에서 쓰는 요청/응답 데이터 형식
 # sungyoon01에서 완성된 걸 그대로 가져옴 (내용 수정 없음)
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -25,6 +25,7 @@ class PostResponse(BaseModel):
     view_count: int = 0
     user_id: Optional[int] = None
     liked_by_me: bool = False
+    images: List[str] = []
 
 
 class CommentCreate(BaseModel):
