@@ -294,7 +294,7 @@ def get_my_gallery(
 # 2. 차량 휠/타이어 제원 추천 API: POST /api/v1/recommend/vehicle
 # ----------------------------------------------------
 class VehicleRecommendBody(BaseModel):
-    vehicle_model: str = Field(..., example="현대 아반떼 CN7", description="사용자가 입력한 차량 모델명")
+    vehicle_model: str = Field(..., examples=["현대 아반떼 CN7"], description="사용자가 입력한 차량 모델명")
 
 @router.post("/recommend/vehicle", tags=["Recommend"])
 async def recommend_vehicle_specs(
@@ -359,8 +359,8 @@ async def recommend_vehicle_specs(
 # 3. 휠 이름으로 제원 검색 API: POST /api/v1/search/wheel
 # ----------------------------------------------------
 class WheelSearchBody(BaseModel):
-    wheel_name: str = Field(..., example="BBS LM", description="검색할 휠 제품명")
-    vehicle_model: Optional[str] = Field(None, example="현대 아반떼 CN7", description="호환성을 함께 확인할 차량 모델명")
+    wheel_name: str = Field(..., examples=["BBS LM"], description="검색할 휠 제품명")
+    vehicle_model: Optional[str] = Field(None, examples=["현대 아반떼 CN7"], description="호환성을 함께 확인할 차량 모델명")
 
 @router.post("/search/wheel", tags=["Search"])
 async def search_wheel_spec(
